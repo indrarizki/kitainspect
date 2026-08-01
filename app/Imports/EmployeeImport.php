@@ -70,44 +70,52 @@ class EmployeeImport implements ToModel, WithStartRow
         }
 
         if (! $hasAny) {
-            return null; 
-        }
-        try {
-            file_put_contents(storage_path('logs/employee_import_debug.log'), json_encode($row) . PHP_EOL, FILE_APPEND);
-        } catch (\Exception $e) {
+            return null;
         }
 
-        $joinDate = $this->parseDate($row[4] ?? null);
-        $dateOfBirth = $this->parseDate($row[7] ?? null);
-        $resignDate = $this->parseDate($row[13] ?? null);
+        $code = isset($row[2]) ? trim((string) $row[2]) : null;
 
-        if (is_null($joinDate)) {
-            try {
-                file_put_contents(storage_path('logs/employee_import_debug.log'), "PARSE_JOINDATE_FAILED: " . ($row[4] ?? 'NULL') . PHP_EOL, FILE_APPEND);
-            } catch (\Exception $e) {
-            }
+        // The employee code is the identifier used to match existing records.
+        // Without it we cannot safely update, so the row is skipped.
+        if (blank($code)) {
+            return null;
         }
 
-        return new Employee([
-            // Menggunakan array_get atau mencocokkan key slug asli hasil konversi Excel
-            // 'id'                  => Str::uuid(),
-            'code'                => $row[2] ?? null,
+        $attributes = [
+            'code'                => $code,
             'fullName'            => $row[3] ?? null,
-            'joinDate'            => $joinDate,
+            'joinDate'            => $this->parseDate($row[4] ?? null),
             'employeeStatus'      => $row[5] ?? null,
             'gender'              => $row[6] ?? null,
-            'dateOfBirth'         => $dateOfBirth,
+            'dateOfBirth'         => $this->parseDate($row[7] ?? null),
             'identityNumber'      => $row[8] ?? null,
             'identityType'        => $row[9] ?? null,
             'maritalStatus'       => $row[10] ?? null,
-            'leaveBalance'        => isset($row[11]) ? (int)$row[11] : 0,
+            'leaveBalance'        => isset($row[11]) ? (int) $row[11] : 0,
             'taxGroup'            => $row[12] ?? null,
-            'resignDate'          => $resignDate,
+            'resignDate'          => $this->parseDate($row[13] ?? null),
             'haveOvertimeBenefit' => filter_var($row[14] ?? false, FILTER_VALIDATE_BOOLEAN),
             'email'               => $row[15] ?? null,
             'company_id'          => $this->companyId,
-        ]);
-    }
+        ];
 
-    
+        $employee = Employee::where('company_id', $this->companyId)
+            ->where('code', $code)
+            ->first();
+
+        // Existing employee: only persist when the imported data actually differs.
+        if ($employee) {
+            $employee->fill($attributes);
+
+            if ($employee->isDirty()) {
+                $employee->save();
+            }
+
+            // Returning null prevents the importer from inserting a duplicate row.
+            return null;
+        }
+
+        // New employee code: insert a fresh record.
+        return new Employee($attributes);
+    }
 }
